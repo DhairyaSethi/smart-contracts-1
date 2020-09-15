@@ -1,6 +1,6 @@
 pragma solidity 0.5.17;
 
-import "./zeppelin/SafeMath.sol";
+import "./SafeMath.sol";
 import "./zeppelin/SafeERC20.sol";
 
 

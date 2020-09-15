@@ -23,23 +23,21 @@
 
 pragma solidity 0.5.17;
 
-import "./zeppelin/SafeMath.sol";
+import "./SafeMath.sol";
 import "./zeppelin/Ownable.sol";
 import "./zeppelin/SafeERC20.sol";
 import "./IERC20Burnable.sol";
 import "./ITreasury.sol";
-import "./IUniswapRouter.sol";
+import "./ISwapRouter.sol";
 import "./LPTokenWrapper.sol";
 
 
 contract BoostRewardsV2 is LPTokenWrapper, Ownable {
     IERC20 public boostToken;
-    address public treasury;
-    address public treasurySetter;
-    UniswapRouter public uniswapRouter;
-    address public stablecoin;
+    ITreasury public treasury;
+    SwapRouter public swapRouter;
+    IERC20 public stablecoin;
     
-    uint256 public constant MAX_NUM_BOOSTERS = 5;
     uint256 public tokenCapAmount;
     uint256 public starttime;
     uint256 public duration;
@@ -53,11 +51,14 @@ contract BoostRewardsV2 is LPTokenWrapper, Ownable {
     // booster variables
     // variables to keep track of totalSupply and balances (after accounting for multiplier)
     uint256 public boostedTotalSupply;
+    uint256 public lastBoostPurchase; // timestamp of lastBoostPurchase
     mapping(address => uint256) public boostedBalances;
     mapping(address => uint256) public numBoostersBought; // each booster = 5% increase in stake amt
     mapping(address => uint256) public nextBoostPurchaseTime; // timestamp for which user is eligible to purchase another booster
-    uint256 public boosterPrice = PRECISION;
-    uint256 internal constant PRECISION = 1e18;
+    uint256 public globalBoosterPrice = 1e18;
+    uint256 public boostThreshold = 10;
+    uint256 public boostScaleFactor = 20;
+    uint256 public scaleFactor = 300;
 
     event RewardAdded(uint256 reward);
     event RewardPaid(address indexed user, uint256 reward);
@@ -81,18 +82,21 @@ contract BoostRewardsV2 is LPTokenWrapper, Ownable {
         uint256 _tokenCapAmount,
         IERC20 _stakeToken,
         IERC20 _boostToken,
-        address _treasurySetter,
-        UniswapRouter _uniswapRouter,
+        address _treasury,
+        SwapRouter _swapRouter,
         uint256 _starttime,
         uint256 _duration
     ) public LPTokenWrapper(_stakeToken) {
         tokenCapAmount = _tokenCapAmount;
         boostToken = _boostToken;
-        boostToken.approve(address(_uniswapRouter), uint256(-1));
-        treasurySetter = _treasurySetter;
-        uniswapRouter = _uniswapRouter;
+        treasury = ITreasury(_treasury);
+        stablecoin = treasury.defaultToken();
+        swapRouter = _swapRouter;
         starttime = _starttime;
+        lastBoostPurchase = _starttime;
         duration = _duration;
+        boostToken.safeApprove(address(_swapRouter), uint256(-1));
+        stablecoin.safeApprove(address(treasury), uint256(-1));
     }
     
     function lastTimeRewardApplicable() public view returns (uint256) {
@@ -121,6 +125,38 @@ contract BoostRewardsV2 is LPTokenWrapper, Ownable {
                 .add(rewards[account]);
     }
 
+    function getBoosterPrice(address user)
+        public view returns (uint256 boosterPrice, uint256 newBoostBalance)
+    {
+        if (boostedTotalSupply == 0) return (0,0);
+
+        // 5% increase for each previously user-purchased booster
+        uint256 boostersBought = numBoostersBought[user];
+        boosterPrice = pow(globalBoosterPrice, 105, 100, boostersBought);
+
+        // increment boostersBought by 1
+        boostersBought = boostersBought.add(1);
+
+        // if no. of boosters exceed threshold, increase booster price by boostScaleFactor;
+        if (boostersBought >= boostThreshold) {
+            boosterPrice = pow(boosterPrice, boostScaleFactor, 100, boostersBought.sub(boostThreshold));
+        }
+
+        // 2.5% decrease for every 2 hour interval since last global boost purchase
+        boosterPrice = pow(boosterPrice, 975, 1000, (block.timestamp.sub(lastBoostPurchase)).div(2 hours));
+
+        // adjust price based on expected increase in boost supply
+        // since booster not bought yet, have to increment by 1
+        newBoostBalance = balanceOf(user)
+            .mul((numBoostersBought[user].add(1)).mul(5).add(100))
+            .div(100);
+        uint256 boostBalanceIncrease = newBoostBalance.sub(boostedBalances[user]);
+        boosterPrice = boosterPrice
+            .mul(boostBalanceIncrease)
+            .mul(scaleFactor)
+            .div(boostedTotalSupply);
+    }
+
     // stake visibility is public as overriding LPTokenWrapper's stake() function
     function stake(uint256 amount) public updateReward(msg.sender) checkStart {
         require(amount > 0, "Cannot stake 0");
@@ -132,9 +168,12 @@ contract BoostRewardsV2 is LPTokenWrapper, Ownable {
             "token cap exceeded"
         );
 
-        // update boosted balance and supply
-        updateBoostBalanceAndSupply(msg.sender);
-        
+        // boosters do not affect new amounts
+        boostedBalances[msg.sender] = boostedBalances[msg.sender].add(amount);
+        boostedTotalSupply = boostedTotalSupply.add(amount);
+
+        _getReward(msg.sender);
+
         // transfer token last, to follow CEI pattern
         stakeToken.safeTransferFrom(msg.sender, address(this), amount);
     }
@@ -143,76 +182,73 @@ contract BoostRewardsV2 is LPTokenWrapper, Ownable {
         require(amount > 0, "Cannot withdraw 0");
         super.withdraw(amount);
         
+        // reset boosts :(
+        numBoostersBought[msg.sender] = 0;
+
         // update boosted balance and supply
-        updateBoostBalanceAndSupply(msg.sender);
-        
+        updateBoostBalanceAndSupply(msg.sender, 0);
+        _getReward(msg.sender);
         stakeToken.safeTransfer(msg.sender, amount);
+    }
+
+    function getReward() public updateReward(msg.sender) checkStart {
+        _getReward(msg.sender);
     }
 
     function exit() external {
         withdraw(balanceOf(msg.sender));
-        getReward();
     }
 
-    function getReward() public updateReward(msg.sender) checkStart {
-        uint256 reward = earned(msg.sender);
-        if (reward > 0) {
-            rewards[msg.sender] = 0;
-            boostToken.safeTransfer(msg.sender, reward);
-            emit RewardPaid(msg.sender, reward);
-        }
+    function setScaleFactorsAndThreshold(
+        uint256 _boostThreshold,
+        uint256 _boostScaleFactor,
+        uint256 _scaleFactor
+    ) external onlyOwner
+    {
+        boostThreshold = _boostThreshold;
+        boostScaleFactor = _boostScaleFactor;
+        scaleFactor = _scaleFactor;
     }
     
     function boost() external updateReward(msg.sender) checkStart {
         require(
-            // 2 days after starttime
-            block.timestamp > starttime.add(172800) &&
             block.timestamp > nextBoostPurchaseTime[msg.sender],
             "early boost purchase"
         );
-        
-        // increase next purchase eligibility by an hour
-        nextBoostPurchaseTime[msg.sender] = block.timestamp.add(3600);
-        
-        // increase no. of boosters bought
-        uint256 booster = numBoostersBought[msg.sender].add(1);
-        numBoostersBought[msg.sender] = booster;
-        require(booster <= MAX_NUM_BOOSTERS, "max boosters bought");
 
         // save current booster price, since transfer is done last
-        booster = boosterPrice;
-        // increase next booster price by 5%
-        boosterPrice = boosterPrice.mul(105).div(100);
+        // since getBoosterPrice() returns new boost balance, avoid re-calculation
+        (uint256 boosterAmount, uint256 newBoostBalance) = getBoosterPrice(msg.sender);
+        // user's balance and boostedSupply will be changed in this function
+        applyBoost(msg.sender, newBoostBalance);
         
-        // update boosted balance and supply
-        updateBoostBalanceAndSupply(msg.sender);
-        
-        boostToken.safeTransferFrom(msg.sender, address(this), booster);
+        _getReward(msg.sender);
+
+        boostToken.safeTransferFrom(msg.sender, address(this), boosterAmount);
         
         IERC20Burnable burnableBoostToken = IERC20Burnable(address(boostToken));
-        // if treasury not set, burn all
-        if (treasury == address(0)) {
-            burnableBoostToken.burn(booster);
-            return;
-        }
 
-        // otherwise, burn 50%
-        uint256 burnAmount = booster.div(2);
+        // burn 25%
+        uint256 burnAmount = boosterAmount.div(4);
         burnableBoostToken.burn(burnAmount);
-        booster = booster.sub(burnAmount);
+        boosterAmount = boosterAmount.sub(burnAmount);
         
-        // swap to stablecoin, transferred to treasury
+        // swap to stablecoin
         address[] memory routeDetails = new address[](3);
         routeDetails[0] = address(boostToken);
-        routeDetails[1] = uniswapRouter.WETH();
-        routeDetails[2] = stablecoin;
-        uniswapRouter.swapExactTokensForTokens(
-            booster,
+        routeDetails[1] = swapRouter.WETH();
+        routeDetails[2] = address(stablecoin);
+        uint[] memory amounts = swapRouter.swapExactTokensForTokens(
+            boosterAmount,
             0,
             routeDetails,
-            treasury,
+            address(this),
             block.timestamp + 100
         );
+
+        // transfer to treasury
+        // index 2 = final output amt
+        treasury.deposit(stablecoin, amounts[2]);
     }
 
     function notifyRewardAmount(uint256 reward)
@@ -226,23 +262,66 @@ contract BoostRewardsV2 is LPTokenWrapper, Ownable {
         emit RewardAdded(reward);
     }
     
-    function setTreasury(address _treasury)
-        external
-    {
-        require(msg.sender == treasurySetter, "only setter");
-        treasury = _treasury;
-        stablecoin = ITreasury(treasury).defaultToken();
-        treasurySetter = address(0);
-    }
-    
-    function updateBoostBalanceAndSupply(address user) internal {
-         // subtract existing balance from boostedSupply
+    function updateBoostBalanceAndSupply(address user, uint256 newBoostBalance) internal {
+        // subtract existing balance from boostedSupply
         boostedTotalSupply = boostedTotalSupply.sub(boostedBalances[user]);
-        // calculate and update new boosted balance (user's balance has been updated by parent method)
-        // each booster adds 5% to stake amount
-        uint256 newBoostBalance = balanceOf(user).mul(numBoostersBought[user].mul(5).add(100)).div(100);
+    
+        // when applying boosts,
+        // newBoostBalance has already been calculated in getBoosterPrice()
+        if (newBoostBalance == 0) {
+            // each booster adds 5% to current stake amount
+            newBoostBalance = balanceOf(user).mul(numBoostersBought[user].mul(5).add(100)).div(100);
+        }
+
+        // update user's boosted balance
         boostedBalances[user] = newBoostBalance;
+    
         // update boostedSupply
         boostedTotalSupply = boostedTotalSupply.add(newBoostBalance);
+    }
+
+    function applyBoost(address user, uint256 newBoostBalance) internal {
+        // increase no. of boosters bought
+        numBoostersBought[user] = numBoostersBought[user].add(1);
+
+        updateBoostBalanceAndSupply(user, newBoostBalance);
+        
+        // increase next purchase eligibility by an hour
+        nextBoostPurchaseTime[user] = block.timestamp.add(3600);
+
+        // increase global booster price by 1%
+        globalBoosterPrice = globalBoosterPrice.mul(101).div(100);
+
+        lastBoostPurchase = block.timestamp;
+    }
+
+    function _getReward(address user) internal {
+        uint256 reward = earned(user);
+        if (reward > 0) {
+            rewards[user] = 0;
+            boostToken.safeTransfer(user, reward);
+            emit RewardPaid(user, reward);
+        }
+    }
+
+   /// Imported from: https://forum.openzeppelin.com/t/does-safemath-library-need-a-safe-power-function/871/7
+   /// Modified so that it takes in 3 arguments for base
+   /// @return a * (b / c)^exponent 
+   function pow(uint256 a, uint256 b, uint256 c, uint256 exponent) internal pure returns (uint256) {
+        if (exponent == 0) {
+            return a;
+        }
+        else if (exponent == 1) {
+            return a.mul(b).div(c);
+        }
+        else if (a == 0 && exponent != 0) {
+            return 0;
+        }
+        else {
+            uint256 z = a.mul(b).div(c);
+            for (uint256 i = 1; i < exponent; i++)
+                z = z.mul(b).div(c);
+            return z;
+        }
     }
 }

@@ -23,7 +23,7 @@
 
 pragma solidity 0.5.17;
 
-import "./zeppelin/SafeMath.sol";
+import "./SafeMath.sol";
 import "./zeppelin/SafeERC20.sol";
 import "./IERC20.sol";
 import "./ITreasury.sol";
@@ -63,7 +63,7 @@ contract BoostGovV2 is LPTokenWrapperWithSlash {
     uint256 public proposalCount;
     uint256 public proposalPeriod = 2 days;
     uint256 public lockPeriod = 3 days;
-    uint256 public minimum = 1337e15; // 1.337 BOOST
+    uint256 public minimum = 1337e16; // 13.37 BOOST
 
     constructor(IERC20 _stakeToken, ITreasury _treasury, SwapRouter _swapRouter)
         public
@@ -139,7 +139,7 @@ contract BoostGovV2 is LPTokenWrapperWithSlash {
         // update proposal total supply
         proposals[id].totalSupply = Math.sqrt(totalSupply());
 
-        // sum votes, multiply by precision, divide by total supply
+        // sum votes, multiply by precision, divide by square rooted total supply
         uint256 quorum = 
             (proposals[id].totalForVotes.add(proposals[id].totalAgainstVotes))
             .mul(PERCENTAGE_PRECISION)
@@ -155,7 +155,6 @@ contract BoostGovV2 is LPTokenWrapperWithSlash {
          ) {
             // treasury to send funds to proposal
             treasury.withdraw(
-                stablecoin,
                 proposals[id].withdrawAmount,
                 proposals[id].withdrawAddress
             );

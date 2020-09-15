@@ -23,7 +23,7 @@
 
 pragma solidity 0.5.17;
 
-import "./zeppelin/SafeMath.sol";
+import "./SafeMath.sol";
 import "./zeppelin/SafeERC20.sol";
 import "./zeppelin/Ownable.sol";
 import "./IERC20.sol";
@@ -43,7 +43,7 @@ contract Treasury is Ownable, ITreasury {
     mapping(address => uint256) ecoFundAmts;
 
     // 1% = 100
-    uint256 public constant MAX_FUND_PERCENTAGE = 1000; // 10%
+    uint256 public constant MAX_FUND_PERCENTAGE = 1500; // 15%
     uint256 public constant PERCENTAGE_PRECISION = 10000; // 100%
     uint256 public fundPercentage = 500; // 5%
     
@@ -60,10 +60,6 @@ contract Treasury is Ownable, ITreasury {
 
     function setSwapRouter(SwapRouter _swapRouter) external onlyOwner {
         swapRouter = _swapRouter;
-    }
-
-    function setDefaultToken(IERC20 _defaultToken) external onlyOwner {
-        defaultToken = _defaultToken;
     }
 
     function setEcoFund(address _ecoFund) external onlyOwner {
@@ -85,10 +81,11 @@ contract Treasury is Ownable, ITreasury {
         ecoFundAmts[address(token)] = amount.mul(fundPercentage).div(PERCENTAGE_PRECISION);
     }
 
-    function withdraw(IERC20 token, uint256 amount, address withdrawAddress) external {
+    // only default token withdrawals allowed
+    function withdraw(uint256 amount, address withdrawAddress) external {
         require(msg.sender == gov, "caller not gov");
-        require(balanceOf(token) >= amount, "insufficient funds");
-        token.safeTransfer(withdrawAddress, amount);
+        require(balanceOf(defaultToken) >= amount, "insufficient funds");
+        defaultToken.safeTransfer(withdrawAddress, amount);
     }
 
     function convertToDefaultToken(address[] calldata routeDetails, uint256 amount) external {

@@ -1,6 +1,6 @@
 pragma solidity 0.5.17;
 
-import "./SafeMath.sol";
+import "../SafeMath.sol";
 import "./Address.sol";
 import "../IERC20.sol";
 
