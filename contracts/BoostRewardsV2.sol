@@ -58,7 +58,7 @@ contract BoostRewardsV2 is LPTokenWrapper, Ownable {
     uint256 public globalBoosterPrice = 1e18;
     uint256 public boostThreshold = 10;
     uint256 public boostScaleFactor = 20;
-    uint256 public scaleFactor = 300;
+    uint256 public scaleFactor = 320;
 
     event RewardAdded(uint256 reward);
     event RewardPaid(address indexed user, uint256 reward);
@@ -148,9 +148,9 @@ contract BoostRewardsV2 is LPTokenWrapper, Ownable {
         boosterPrice = pow(boosterPrice, 975, 1000, (block.timestamp.sub(lastBoostPurchase)).div(2 hours));
 
         // adjust price based on expected increase in boost supply
-        // since booster not bought yet, have to increment by 1
+        // boostersBought has been incremented by 1 already
         newBoostBalance = balanceOf(user)
-            .mul((numBoostersBought[user].add(1)).mul(5).add(100))
+            .mul(boostersBought.mul(5).add(100))
             .div(100);
         uint256 boostBalanceIncrease = newBoostBalance.sub(boostedBalances[user]);
         boosterPrice = boosterPrice
