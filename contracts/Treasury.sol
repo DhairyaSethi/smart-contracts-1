@@ -41,7 +41,7 @@ contract Treasury is Ownable, ITreasury {
     address public gov;
     address internal govSetter;
 
-    mapping(address => uint256) ecoFundAmts;
+    mapping(address => uint256) public ecoFundAmts;
 
     // 1% = 100
     uint256 public constant MAX_FUND_PERCENTAGE = 1500; // 15%
