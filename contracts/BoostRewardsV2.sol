@@ -57,7 +57,7 @@ contract BoostRewardsV2 is LPTokenWrapper, Ownable {
     mapping(address => uint256) public nextBoostPurchaseTime; // timestamp for which user is eligible to purchase another booster
     uint256 public globalBoosterPrice = 1e18;
     uint256 public boostThreshold = 10;
-    uint256 public boostScaleFactor = 120;
+    uint256 public boostScaleFactor = 20;
     uint256 public scaleFactor = 300;
 
     event RewardAdded(uint256 reward);
@@ -132,14 +132,16 @@ contract BoostRewardsV2 is LPTokenWrapper, Ownable {
 
         // 5% increase for each previously user-purchased booster
         uint256 boostersBought = numBoostersBought[user];
-        boosterPrice = pow(globalBoosterPrice, 105, 100, boostersBought);
+        boosterPrice = globalBoosterPrice.mul(boostersBought.mul(5).add(100)).div(100);
 
         // increment boostersBought by 1
         boostersBought = boostersBought.add(1);
 
         // if no. of boosters exceed threshold, increase booster price by boostScaleFactor;
         if (boostersBought >= boostThreshold) {
-            boosterPrice = pow(boosterPrice, boostScaleFactor, 100, boostersBought.sub(boostThreshold));
+            boosterPrice = boosterPrice
+                .mul((boostersBought.sub(boostThreshold)).mul(boostScaleFactor).add(100))
+                .div(100);
         }
 
         // 2.5% decrease for every 2 hour interval since last global boost purchase
