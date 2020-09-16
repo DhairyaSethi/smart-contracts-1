@@ -57,7 +57,7 @@ contract BoostRewardsV2 is LPTokenWrapper, Ownable {
     mapping(address => uint256) public nextBoostPurchaseTime; // timestamp for which user is eligible to purchase another booster
     uint256 public globalBoosterPrice = 1e18;
     uint256 public boostThreshold = 10;
-    uint256 public boostScaleFactor = 20;
+    uint256 public boostScaleFactor = 120;
     uint256 public scaleFactor = 300;
 
     event RewardAdded(uint256 reward);

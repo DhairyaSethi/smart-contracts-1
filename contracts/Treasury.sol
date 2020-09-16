@@ -93,6 +93,7 @@ contract Treasury is Ownable, ITreasury {
     }
 
     function convertToDefaultToken(address[] calldata routeDetails, uint256 amount) external {
+        require(routeDetails[0] != address(defaultToken), "src can't be defaultToken");
         require(routeDetails[routeDetails.length - 1] == address(defaultToken), "dest not defaultToken");
         IERC20 srcToken = IERC20(routeDetails[0]);
         require(balanceOf(srcToken) >= amount, "insufficient funds");
