@@ -39,6 +39,7 @@ contract Treasury is Ownable, ITreasury {
     SwapRouter public swapRouter;
     address public ecoFund;
     address public gov;
+    address internal govSetter;
 
     mapping(address => uint256) ecoFundAmts;
 
@@ -52,10 +53,13 @@ contract Treasury is Ownable, ITreasury {
         swapRouter = _swapRouter;
         defaultToken = _defaultToken;
         ecoFund = _ecoFund;
+        govSetter = msg.sender;
     }
 
-    function setGov(address _gov) external onlyOwner {
+    function setGov(address _gov) external {
+        require(msg.sender == govSetter, "not authorized");
         gov = _gov;
+        govSetter = address(0);
     }
 
     function setSwapRouter(SwapRouter _swapRouter) external onlyOwner {

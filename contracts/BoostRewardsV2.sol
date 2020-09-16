@@ -158,7 +158,8 @@ contract BoostRewardsV2 is LPTokenWrapper, Ownable {
     }
 
     // stake visibility is public as overriding LPTokenWrapper's stake() function
-    function stake(uint256 amount) public updateReward(msg.sender) checkStart {
+    /// @param claimRewards in case underlying claimRewards function doesn't work / save gas
+    function stake(uint256 amount, bool claimRewards) public updateReward(msg.sender) checkStart {
         require(amount > 0, "Cannot stake 0");
         super.stake(amount);
 
@@ -172,13 +173,14 @@ contract BoostRewardsV2 is LPTokenWrapper, Ownable {
         boostedBalances[msg.sender] = boostedBalances[msg.sender].add(amount);
         boostedTotalSupply = boostedTotalSupply.add(amount);
 
-        _getReward(msg.sender);
+        if (claimRewards) _getReward(msg.sender);
 
         // transfer token last, to follow CEI pattern
         stakeToken.safeTransferFrom(msg.sender, address(this), amount);
     }
 
-    function withdraw(uint256 amount) public updateReward(msg.sender) checkStart {
+    /// @param claimRewards in case underlying claimRewards function doesn't work / save gas
+    function withdraw(uint256 amount, bool claimRewards) public updateReward(msg.sender) checkStart {
         require(amount > 0, "Cannot withdraw 0");
         super.withdraw(amount);
         
@@ -187,7 +189,10 @@ contract BoostRewardsV2 is LPTokenWrapper, Ownable {
 
         // update boosted balance and supply
         updateBoostBalanceAndSupply(msg.sender, 0);
-        _getReward(msg.sender);
+
+        if (claimRewards) _getReward(msg.sender);
+
+        // transfer token last, to follow CEI pattern
         stakeToken.safeTransfer(msg.sender, amount);
     }
 
@@ -196,7 +201,7 @@ contract BoostRewardsV2 is LPTokenWrapper, Ownable {
     }
 
     function exit() external {
-        withdraw(balanceOf(msg.sender));
+        withdraw(balanceOf(msg.sender), true);
     }
 
     function setScaleFactorsAndThreshold(
