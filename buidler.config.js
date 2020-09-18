@@ -2,6 +2,7 @@ usePlugin("@nomiclabs/buidler-truffle5");
 usePlugin("@nomiclabs/buidler-web3");
 usePlugin("@nomiclabs/buidler-etherscan");
 
+require('./scripts/wave3Distribution');
 require('./scripts/defiPools');
 require('./scripts/internalPoolGov');
 require('dotenv').config();
