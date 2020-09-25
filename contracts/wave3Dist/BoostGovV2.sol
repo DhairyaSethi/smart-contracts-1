@@ -23,12 +23,12 @@
 
 pragma solidity 0.5.17;
 
-import "./SafeMath.sol";
-import "./zeppelin/SafeERC20.sol";
-import "./IERC20.sol";
-import "./ITreasury.sol";
-import "./ISwapRouter.sol";
-import "./LPTokenWrapperWithSlash.sol";
+import "../SafeMath.sol";
+import "../zeppelin/SafeERC20.sol";
+import "../IERC20.sol";
+import "../ITreasury.sol";
+import "../ISwapRouter.sol";
+import "../LPTokenWrapperWithSlash.sol";
 
 
 contract BoostGovV2 is LPTokenWrapperWithSlash {

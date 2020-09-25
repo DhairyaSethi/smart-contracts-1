@@ -23,13 +23,13 @@
 
 pragma solidity 0.5.17;
 
-import "./SafeMath.sol";
-import "./zeppelin/Ownable.sol";
-import "./zeppelin/SafeERC20.sol";
-import "./IERC20Burnable.sol";
-import "./ITreasury.sol";
-import "./ISwapRouter.sol";
-import "./LPTokenWrapper.sol";
+import "../SafeMath.sol";
+import "../zeppelin/Ownable.sol";
+import "../zeppelin/SafeERC20.sol";
+import "../IERC20Burnable.sol";
+import "../ITreasury.sol";
+import "../ISwapRouter.sol";
+import "../LPTokenWrapper.sol";
 
 
 contract BoostRewardsV2 is LPTokenWrapper, Ownable {

@@ -23,12 +23,12 @@
 
 pragma solidity 0.5.17;
 
-import "./SafeMath.sol";
-import "./zeppelin/SafeERC20.sol";
-import "./zeppelin/Ownable.sol";
-import "./IERC20.sol";
-import "./ITreasury.sol";
-import "./ISwapRouter.sol";
+import "../SafeMath.sol";
+import "../zeppelin/SafeERC20.sol";
+import "../zeppelin/Ownable.sol";
+import "../IERC20.sol";
+import "../ITreasury.sol";
+import "../ISwapRouter.sol";
 
 
 contract Treasury is Ownable, ITreasury {

@@ -28,13 +28,13 @@ contract LPTokenWrapperWithSlash {
     function stake(uint256 amount) public {
         _totalSupply = _totalSupply.add(amount);
         _balances[msg.sender] = _balances[msg.sender].add(amount);
-        // safeTransferFrom shifted to overriden method
+        stakeToken.safeTransferFrom(msg.sender, address(this), amount);
     }
 
     function withdraw(uint256 amount) public {
         _totalSupply = _totalSupply.sub(amount);
         _balances[msg.sender] = _balances[msg.sender].sub(amount);
-        // safeTransferFrom shifted to overriden method
+        stakeToken.safeTransfer(msg.sender, amount);
     }
 
     function slash(address proposer) internal returns (uint256 amount) {
