@@ -45,12 +45,12 @@ contract BoostVault is ERC20, ERC20Detailed {
     uint256 public constant MAX = 10000;
   
     address public gov;
-    Controller public controller;
+    IController public controller;
 
     constructor(
         address _token,
         address _gov,
-        Controller _controller,
+        IController _controller,
         uint256 _cap
     ) public ERC20Detailed(
       string(abi.encodePacked("bfVault-", ERC20Detailed(_token).name())),
@@ -142,7 +142,7 @@ contract BoostVault is ERC20, ERC20Detailed {
 
         // Apply withdrawal fee, transfer and notify rewards pool
         uint256 withdrawFee = requestedAmt.mul(withdrawalFee).div(MAX);
-        token.safeTransfer(controller.getRewardAddress(token), withdrawFee);
+        token.safeTransfer(controller.rewards(token), withdrawFee);
 
         // TODO: Call vault rewards notifyRewardDistribution
 

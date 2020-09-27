@@ -1,11 +1,25 @@
 pragma solidity 0.5.17;
 
 import "../IERC20.sol";
+import "../ITreasury.sol";
+import "./IVault.sol";
+import "./IVaultRewards.sol";
 
 
 interface IController {
-    function withdraw(address, uint) external;
-    function balanceOf(address) external view returns (uint);
-    function earn(address, uint) external;
-    function getRewardAddress(IERC20 token) external view returns (address);
+    function balanceOf(address) external view returns (uint256);
+    function rewards(address token) external view returns (IVaultRewards);
+    function vault(address token) external view returns (IVault);
+    function treasury() external view returns (ITreasury);
+    function getHarvestInfo(address strategy, address user, address token)
+        external view returns (
+        uint256 reinvestmentPercentage,
+        uint256 hurdleAmount,
+        uint256 harvestPercentage
+    );
+    function withdraw(address, uint256) external;
+    function earn(address, uint256) external;
+    function increaseHurdleRate(address token) external;
+    function increaseHarvestPercentage(address user, address token) external;
+    function resetHarvestPercentage(address user, address token) external;
 }

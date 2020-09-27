@@ -24,8 +24,6 @@
 pragma solidity 0.5.17;
 
 import "./IController.sol";
-import "./IVault.sol";
-import "./IVaultRewards.sol";
 import "../SafeMath.sol";
 import "../zeppelin/SafeERC20.sol";
 
@@ -47,141 +45,261 @@ contract Controller is IController {
         IVault vault;
         IVaultRewards rewards;
         IStrategy[] strategies;
-        uint256 totalInvestedAmount;
         uint256 reinvestmentPercentage;
+        uint256 currentHurdleRate;
+        uint256 nextHurdleRate;
+        uint256 hurdleLastUpdateTime;
+        mapping(address => uint256) harvestPercentages;
+        mapping(address => uint256) harvestLastUpdateTime;
     }
     
     address public gov;
     address public strategist;
-    address public treasury;
+    ITreasury public treasury;
+    IERC20 public boostToken;
     
     mapping(address => TokenStratInfo) public tokenStratsInfo;
     mapping(address => uint256) public capAmounts;
     mapping(address => uint256) public investedAmounts;
     mapping(address => mapping(address => bool)) public approvedStrategies;
+
+    uint256 public currentEpochTime;
+    uint256 public constant EPOCH_DURATION = 2 weeks;
+    uint256 internal constant DENOM = 10000;
+    uint256 internal constant HURDLE_RATE_MAX = 500; // max 5%
+    uint256 internal constant BASE_HARVEST_PERCENTAGE = 50; // 0.5%
+    uint256 internal constant BASE_REINVESTMENT_PERCENTAGE = 8000; // 80%
+    uint256 internal constant HARVEST_PERCENTAGE_MAX = 100; // max 1% extra
     
-    uint public split = 500;
-    uint public constant MAX = 10000;
-    
-    constructor(address _gov, address _strategist, address _treasury) public {
+    constructor(
+        address _gov,
+        address _strategist,
+        ITreasury _treasury,
+        IERC20 _boostToken,
+        uint256 _epochStart
+    ) public {
         gov = _gov;
         strategist = _strategist;
         treasury = _treasury;
+        boostToken = _boostToken;
+        boostToken.approve(address(treasury), uint256(-1));
+        currentEpochTime = _epochStart;
     }
     
-    function setTreasury(address _treasury) external {
-        require(msg.sender == gov, "not gov");
+    modifier updateEpoch() {
+        if (block.timestamp > currentEpochTime.add(EPOCH_DURATION)) {
+            currentEpochTime = currentEpochTime.add(EPOCH_DURATION);
+        }
+        _;
+    }
+
+    function rewards(address token) external view returns (IVaultRewards) {
+        return tokenStratsInfo[token].rewards;
+    }
+
+    function vault(address token) external view returns (IVault) {
+        return tokenStratsInfo[token].vault;
+    }
+
+    function balanceOf(address token) external view returns (uint256) {
+        IStrategy[] storage strategies = tokenStratsInfo[token].strategies;
+        uint256 totalBalance;
+        for (uint256 i = 0; i < strategies.length; i++) {
+            totalBalance = totalBalance.add(strategies[i].balanceOf());
+        }
+        return totalBalance;
+    }
+
+    function getHarvestInfo(
+        address strategy,
+        address user,
+        address token
+    ) external view returns (
+        uint256 reinvestmentPercentage,
+        uint256 hurdleAmount,
+        uint256 harvestPercentage
+    ) {
+        reinvestmentPercentage = tokenStratsInfo[token].reinvestmentPercentage;
+        hurdleAmount = getHurdleAmount(strategy, token);
+        harvestPercentage = getHarvestPercentage(user, token);
+    }
+
+    function setTreasury(ITreasury _treasury) external {
+        require(msg.sender == gov, "!gov");
         treasury = _treasury;
     }
     
     function setStrategist(address _strategist) external {
-        require(msg.sender == gov, "not gov");
+        require(msg.sender == gov, "!gov");
         strategist = _strategist;
     }
     
     function setGovernance(address _gov) external {
-        require(msg.sender == gov, "not gov");
+        require(msg.sender == gov, "!gov");
         gov = _gov;
     }
 
     function setRewards(address _token, IVaultRewards _rewards) external {
-        require(msg.sender == strategist || msg.sender == gov, "not authorized");
-        require(tokenStratsInfo[_token].rewards == address(0), "rewards exists");
+        require(msg.sender == strategist || msg.sender == gov, "!authorized");
+        require(tokenStratsInfo[_token].rewards == IVaultRewards(0), "rewards exists");
         tokenStratsInfo[_token].rewards = _rewards;
     }
     
-    function setVault(address _token, address _vault) public {
-        require(msg.sender == strategist || msg.sender == gov, "not authorized");
-        require(tokenStratsInfo[_token].vault == address(0), "vault exists");
+    function setVault(address _token, IVault _vault) external {
+        require(msg.sender == strategist || msg.sender == gov, "!authorized");
+        require(tokenStratsInfo[_token].vault == IVault(0), "vault exists");
         tokenStratsInfo[_token].vault = _vault;
     }
     
-    function approveStrategy(address _token, IStrategy _strategy, uint256 _cap) external {
-        require(msg.sender == gov, "not gov");
-        require(!approvedStrategies[_token][_strategy], "strat approved");
-        capAmounts[address(_strategy)] = _cap;
-        tokenStratsInfo[_token].strategies.push(_strategy);
-        approvedStrategies[_token][_strategy] = true;
+    function approveStrategy(address _strategy, uint256 _cap) external {
+        require(msg.sender == gov, "!gov");
+        address token = IStrategy(_strategy).want();
+        require(!approvedStrategies[token][_strategy], "strat alr approved");
+        capAmounts[_strategy] = _cap;
+        tokenStratsInfo[token].strategies.push(IStrategy(_strategy));
+        approvedStrategies[token][_strategy] = true;
     }
     
     function changeCap(address strategy, uint256 _cap) external {
-        require(msg.sender == gov, "not gov");
+        require(msg.sender == gov, "!gov");
         capAmounts[strategy] = _cap;
     }
 
-    function revokeStrategy(address _token, address _strategy, uint256 _index) external {
-        require(msg.sender == gov, "not gov");
-        require(approvedStrategies[_token][_strategy], "strat revoked");
-        IStrategy[] storage tokenStrategies = tokenStratsInfo[_token].strategies;
+    function revokeStrategy(address _strategy, uint256 _index) external {
+        require(msg.sender == gov, "!gov");
+        address token = IStrategy(_strategy).want();
+        require(approvedStrategies[token][_strategy], "strat alr revoked");
+        IStrategy[] storage tokenStrategies = tokenStratsInfo[token].strategies;
+        require(address(tokenStrategies[_index]) == _strategy, "wrong index");
+
         // replace revoked strategy with last element in array
         tokenStrategies[_index] = tokenStrategies[tokenStrategies.length - 1];
         delete tokenStrategies[tokenStrategies.length - 1];
         tokenStrategies.length--;
-        approvedStrategies[_token][_strategy] = false;
+        capAmounts[_strategy] = 0;
+        approvedStrategies[token][_strategy] = false;
+
+        // withdraw all funds in strategy back to vault
+        withdrawAll(_strategy);
     }
     
+    function getHurdleAmount(address strategy, address token) public view returns (uint256) {
+        return tokenStratsInfo[token].currentHurdleRate
+            .mul(investedAmounts[strategy])
+            .div(DENOM);
+    }
+
+    function getHarvestPercentage(address user, address token) public view returns (uint256) {
+        return tokenStratsInfo[token].harvestPercentages[user];
+    }
+
     /// @dev check that vault has sufficient funds is done by the call to vault
-    function earn(address strategy, uint amount) public {
+    function earn(address strategy, uint256 amount) public {
         address token = IStrategy(strategy).want();
         TokenStratInfo storage info = tokenStratsInfo[token];
         uint256 newInvestedAmount = investedAmounts[strategy].add(amount);
         require(newInvestedAmount <= capAmounts[strategy], "hit strategy cap");
-        // update invested amount variables
+        // update invested amount
         investedAmounts[strategy] = newInvestedAmount;
-        info.totalInvestedAmount = info.totalInvestedAmount.add(amount);
         // transfer funds to strategy
         info.vault.transferFundsToStrategy(strategy, amount);
     }
     
-    function balanceOf(address token) external view returns (uint256) {
-        return tokenStratsInfo[token].totalInvestedAmount;
+    // Anyone can withdraw non-core strategy tokens => sent to treasury
+    function earnMiscTokens(IStrategy strategy, IERC20 token) external {
+        // should send tokens to this contract
+        strategy.withdraw(address(token));
+        uint256 bal = token.balanceOf(address(this));
+        // send funds to treasury
+        treasury.deposit(token, bal);
     }
-    
-    function withdrawAll(address strategy, address token) public {
-        require(msg.sender == strategist || msg.sender == gov, "not authorized");
-        // TODO: update invested amount variables
-        Strategy(strategies[_token]).withdrawAll();
+
+    function increaseHurdleRate(address token) updateEpoch external {
+        TokenStratInfo storage info = tokenStratsInfo[token];
+        require(msg.sender == address(info.rewards), "!rewards");
+        // see if hurdle rate has to update
+        if (info.hurdleLastUpdateTime < currentEpochTime) {
+            info.currentHurdleRate = info.nextHurdleRate;
+            info.nextHurdleRate = 0;
+        }
+        info.hurdleLastUpdateTime = block.timestamp;
+        // increase hurdle rate by 0.01%
+        info.nextHurdleRate = Math.min(HURDLE_RATE_MAX, info.nextHurdleRate.add(1));
     }
-    
-    function inCaseTokensGetStuck(address _token, uint _amount) public {
-        require(msg.sender == strategist || msg.sender == governance, "!governance");
-        IERC20(_token).safeTransfer(msg.sender, _amount);
+
+    function increaseHarvestPercentage(address user, address token) updateEpoch external {
+        TokenStratInfo storage info = tokenStratsInfo[token];
+        require(msg.sender == address(info.rewards), "!rewards");
+        // see if percentage needs to be reset
+        if (info.harvestLastUpdateTime[user] < currentEpochTime) {
+            info.harvestPercentages[user] = BASE_HARVEST_PERCENTAGE;
+        }
+        info.harvestLastUpdateTime[user] = block.timestamp;
+        // increase harvest percentage by 0.25%
+        info.harvestPercentages[user] = Math.min(
+            HARVEST_PERCENTAGE_MAX,
+            info.harvestPercentages[user].add(25)
+        );
     }
-    
-    function inCaseStrategyTokenGetStuck(address _strategy, address _token) public {
-        require(msg.sender == strategist || msg.sender == governance, "!governance");
-        Strategy(_strategy).withdraw(_token);
+
+    function resetHarvestPercentage(address user, address token) updateEpoch external {
+        TokenStratInfo storage info = tokenStratsInfo[token];
+        require(msg.sender == address(info.rewards), "!rewards");
+        info.harvestLastUpdateTime[user] = block.timestamp;
+        info.harvestPercentages[user] = BASE_HARVEST_PERCENTAGE;
     }
-    
-    // Only allows to withdraw non-core strategy tokens ~ this is over and above normal yield
-    function yearn(address _strategy, address _token, uint parts) public {
-        require(msg.sender == strategist || msg.sender == governance, "!governance");
-        // This contract should never have value in it, but just incase since this is a public call
-        uint _before = IERC20(_token).balanceOf(address(this));
-        Strategy(_strategy).withdraw(_token);
-        uint _after =  IERC20(_token).balanceOf(address(this));
-        if (_after > _before) {
-            uint _amount = _after.sub(_before);
-            address _want = Strategy(_strategy).want();
-            uint[] memory _distribution;
-            uint _expected;
-            _before = IERC20(_want).balanceOf(address(this));
-            IERC20(_token).safeApprove(onesplit, 0);
-            IERC20(_token).safeApprove(onesplit, _amount);
-            (_expected, _distribution) = OneSplitAudit(onesplit).getExpectedReturn(_token, _want, _amount, parts, 0);
-            OneSplitAudit(onesplit).swap(_token, _want, _amount, _expected, _distribution, 0);
-            _after = IERC20(_want).balanceOf(address(this));
-            if (_after > _before) {
-                _amount = _after.sub(_before);
-                uint _reward = _amount.mul(split).div(max);
-                earn(_want, _amount.sub(_reward));
-                IERC20(_want).safeTransfer(rewards, _reward);
-            }
+
+    function changeReinvestmentPercentage(address token, bool isIncrease) updateEpoch external {
+        // flat cost of 1 boost
+        boostToken.safeTransferFrom(msg.sender, address(this), 1e18);
+        treasury.deposit(boostToken, 1e18);
+        TokenStratInfo storage info = tokenStratsInfo[token];
+        if (isIncrease) {
+            info.reinvestmentPercentage = Math.min(DENOM, info.reinvestmentPercentage.add(10));
+        } else {
+            info.reinvestmentPercentage = info.reinvestmentPercentage.sub(10);
         }
     }
     
-    function withdraw(address _token, uint _amount) public {
-        require(msg.sender == vaults[_token], "!vault");
-        Strategy(strategies[_token]).withdraw(_amount);
+    // handle vault withdrawal
+    function withdraw(address token, uint256 withdrawAmount) external {
+        TokenStratInfo storage info = tokenStratsInfo[token];
+        require(msg.sender == (address(info.vault)), "!vault");
+        uint256 remainingWithdrawAmount = withdrawAmount;
+
+        for (uint256 i = 0; i < info.strategies.length; i++) {
+            if (remainingWithdrawAmount == 0) break;
+            IStrategy strategy = info.strategies[i];
+            // withdraw maximum amount possible
+            uint256 actualWithdrawAmount = Math.min(
+                investedAmounts[address(strategy)], remainingWithdrawAmount
+            );
+            remainingWithdrawAmount = remainingWithdrawAmount.sub(actualWithdrawAmount);
+            investedAmounts[address(strategy)] = investedAmounts[address(strategy)]
+                    .sub(remainingWithdrawAmount);
+            // do the actual withdrawal
+            strategy.withdraw(actualWithdrawAmount);
+        }
+    }
+
+    function withdrawAll(address strategy) public {
+        require(
+            msg.sender == strategist ||
+            msg.sender == gov ||
+            msg.sender == address(this),
+            "!authorized"
+        );
+        investedAmounts[strategy] = 0;
+        IStrategy(strategy).withdrawAll();
+    }
+    
+    function inCaseTokensGetStuck(address token, uint amount) public {
+        require(msg.sender == strategist || msg.sender == gov, "!authorized");
+        IERC20(token).safeTransfer(msg.sender, amount);
+    }
+    
+    function inCaseStrategyTokenGetStuck(IStrategy strategy, address token) public {
+        require(msg.sender == strategist || msg.sender == gov, "!authorized");
+        strategy.withdraw(token);
     }
 }
