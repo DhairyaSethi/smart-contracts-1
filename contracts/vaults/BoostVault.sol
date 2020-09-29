@@ -42,7 +42,7 @@ contract BoostVault is ERC20, ERC20Detailed {
     uint256 public cap;
     uint256 public constant MAX_UTILISATION_ALLOWABLE = 9900; // max 99% utilisation
     uint256 public constant MAX_WITHDRAWAL_FEE = 500; // 5%
-    uint256 public constant MAX = 10000;
+    uint256 public constant DENOM = 10000;
   
     address public gov;
     IController public controller;
@@ -96,7 +96,7 @@ contract BoostVault is ERC20, ERC20Detailed {
 
     // Buffer to process small withdrawals
     function availableFunds() public view returns (uint256) {
-        return token.balanceOf(address(this)).mul(maxUtilisation).div(MAX);
+        return token.balanceOf(address(this)).mul(maxUtilisation).div(DENOM);
     }
   
     // Strategies will request funds from controller
@@ -141,8 +141,8 @@ contract BoostVault is ERC20, ERC20Detailed {
         }
 
         // Apply withdrawal fee, transfer and notify rewards pool
-        uint256 withdrawFee = requestedAmt.mul(withdrawalFee).div(MAX);
-        token.safeTransfer(controller.rewards(token), withdrawFee);
+        uint256 withdrawFee = requestedAmt.mul(withdrawalFee).div(DENOM);
+        token.safeTransfer(address(controller.rewards(address(token))), withdrawFee);
 
         // TODO: Call vault rewards notifyRewardDistribution
 

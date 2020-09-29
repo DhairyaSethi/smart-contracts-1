@@ -11,9 +11,9 @@ interface IController {
     function rewards(address token) external view returns (IVaultRewards);
     function vault(address token) external view returns (IVault);
     function treasury() external view returns (ITreasury);
-    function getHarvestInfo(address strategy, address user, address token)
+    function getHarvestInfo(address strategy, address user)
         external view returns (
-        uint256 reinvestmentPercentage,
+        uint256 vaultRewardPercentage,
         uint256 hurdleAmount,
         uint256 harvestPercentage
     );

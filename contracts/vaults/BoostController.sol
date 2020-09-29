@@ -24,17 +24,10 @@
 pragma solidity 0.5.17;
 
 import "./IController.sol";
+import "./IStrategy.sol";
 import "../SafeMath.sol";
 import "../zeppelin/SafeERC20.sol";
 
-interface IStrategy {
-    function want() external view returns (address);
-    function deposit() external;
-    function withdraw(address) external;
-    function withdraw(uint) external;
-    function withdrawAll() external returns (uint);
-    function balanceOf() external view returns (uint);
-}
 
 contract Controller is IController {
     using SafeERC20 for IERC20;
@@ -45,7 +38,7 @@ contract Controller is IController {
         IVault vault;
         IVaultRewards rewards;
         IStrategy[] strategies;
-        uint256 reinvestmentPercentage;
+        uint256 vaultRewardPercentage;
         uint256 currentHurdleRate;
         uint256 nextHurdleRate;
         uint256 hurdleLastUpdateTime;
@@ -68,7 +61,7 @@ contract Controller is IController {
     uint256 internal constant DENOM = 10000;
     uint256 internal constant HURDLE_RATE_MAX = 500; // max 5%
     uint256 internal constant BASE_HARVEST_PERCENTAGE = 50; // 0.5%
-    uint256 internal constant BASE_REINVESTMENT_PERCENTAGE = 8000; // 80%
+    uint256 internal constant BASE_REWARD_PERCENTAGE = 8000; // 80%
     uint256 internal constant HARVEST_PERCENTAGE_MAX = 100; // max 1% extra
     
     constructor(
@@ -112,14 +105,14 @@ contract Controller is IController {
 
     function getHarvestInfo(
         address strategy,
-        address user,
-        address token
+        address user
     ) external view returns (
-        uint256 reinvestmentPercentage,
+        uint256 vaultRewardPercentage,
         uint256 hurdleAmount,
         uint256 harvestPercentage
     ) {
-        reinvestmentPercentage = tokenStratsInfo[token].reinvestmentPercentage;
+        address token = IStrategy(strategy).want();
+        vaultRewardPercentage = tokenStratsInfo[token].vaultRewardPercentage;
         hurdleAmount = getHurdleAmount(strategy, token);
         harvestPercentage = getHarvestPercentage(user, token);
     }
@@ -145,16 +138,19 @@ contract Controller is IController {
         tokenStratsInfo[_token].rewards = _rewards;
     }
     
-    function setVault(address _token, IVault _vault) external {
+    function setVaultAndInitRewardPercentage(IVault _vault) external {
         require(msg.sender == strategist || msg.sender == gov, "!authorized");
-        require(tokenStratsInfo[_token].vault == IVault(0), "vault exists");
-        tokenStratsInfo[_token].vault = _vault;
+        address token = address(_vault.token());
+        require(tokenStratsInfo[token].vault == IVault(0), "vault exists");
+        tokenStratsInfo[token].vault = _vault;
+        tokenStratsInfo[token].vaultRewardPercentage = BASE_REWARD_PERCENTAGE;
     }
     
     function approveStrategy(address _strategy, uint256 _cap) external {
         require(msg.sender == gov, "!gov");
         address token = IStrategy(_strategy).want();
         require(!approvedStrategies[token][_strategy], "strat alr approved");
+        require(tokenStratsInfo[token].vault.token() == IERC20(token), "want != token");
         capAmounts[_strategy] = _cap;
         tokenStratsInfo[token].strategies.push(IStrategy(_strategy));
         approvedStrategies[token][_strategy] = true;
@@ -190,12 +186,17 @@ contract Controller is IController {
     }
 
     function getHarvestPercentage(address user, address token) public view returns (uint256) {
-        return tokenStratsInfo[token].harvestPercentages[user];
+        TokenStratInfo storage info = tokenStratsInfo[token];
+        return (info.harvestLastUpdateTime[user] < currentEpochTime || 
+            (block.timestamp > currentEpochTime.add(EPOCH_DURATION))) ?
+            BASE_HARVEST_PERCENTAGE :
+            info.harvestPercentages[user];
     }
 
     /// @dev check that vault has sufficient funds is done by the call to vault
     function earn(address strategy, uint256 amount) public {
         address token = IStrategy(strategy).want();
+        require(approvedStrategies[token][strategy], "strat !approved");
         TokenStratInfo storage info = tokenStratsInfo[token];
         uint256 newInvestedAmount = investedAmounts[strategy].add(amount);
         require(newInvestedAmount <= capAmounts[strategy], "hit strategy cap");
@@ -249,15 +250,15 @@ contract Controller is IController {
         info.harvestPercentages[user] = BASE_HARVEST_PERCENTAGE;
     }
 
-    function changeReinvestmentPercentage(address token, bool isIncrease) updateEpoch external {
+    function changeVaultRewardPercentage(address token, bool isIncrease) updateEpoch external {
         // flat cost of 1 boost
         boostToken.safeTransferFrom(msg.sender, address(this), 1e18);
         treasury.deposit(boostToken, 1e18);
         TokenStratInfo storage info = tokenStratsInfo[token];
         if (isIncrease) {
-            info.reinvestmentPercentage = Math.min(DENOM, info.reinvestmentPercentage.add(10));
+            info.vaultRewardPercentage = Math.min(DENOM, info.vaultRewardPercentage.add(10));
         } else {
-            info.reinvestmentPercentage = info.reinvestmentPercentage.sub(10);
+            info.vaultRewardPercentage = info.vaultRewardPercentage.sub(10);
         }
     }
     
