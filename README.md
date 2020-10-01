@@ -44,6 +44,9 @@ Quorums are determined by the total supply at the time of proposal resolution an
 
 ## Development
 
+### Configuring Enviornment Variables
+Rename `.env.example` to `.env` and add the INFURA_API_KEY (by making an account [here](https://infura.io/)), PRIVATE_KEY (of your ethereum account with sufficient funds) and ETHERSCAN_API_KEY (from [here](https://etherscan.io/apis)).
+
 ### Building and Tests
 This project uses [buidler](https://buidler.dev/).
 
